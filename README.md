@@ -26,7 +26,7 @@ Publishing requires both explicit authorization in the manual dispatch and appro
 
 1. Complete the owner settings below. Review source PR #67 and its exact pinned candidate, including its build/privacy report, E2E/visual CI results, the baseline sign-offs, and the reviewed preview workflow pins.
 2. After this preview configuration is reviewed and merged to `main`, open **Actions → Deploy KrunchOS preview → Run workflow**.
-3. Enter the full 40-character SHA pinned in the workflow, which must also be the current PR #67 head. Check **I reviewed this exact build and authorize publishing it publicly** only when you intend to publish that build. The build job first verifies the source and produces a manifest.
+3. The workflow builds the full SHA pinned in its reviewed configuration, which must also be the current PR #67 head. Check **I reviewed this exact build and authorize publishing it publicly** only when you intend to publish that build. The build job first verifies the source and produces a manifest.
 4. Approve the pending deployment in the `github-pages` environment when GitHub requests it. The deploy job then revalidates the PR head and CI, and validates the artifact manifest before Pages upload.
 5. Review the Actions summary, provenance artifact, successful deployment, and `github-pages` deployment URL before sharing <https://krunchymonkey.github.io/krunchos-preview/os/>.
 
@@ -34,7 +34,7 @@ There is no push, pull-request, release, or schedule trigger; `workflow_dispatch
 
 ## Rollback
 
-To roll back, run the workflow manually with the full source SHA used by the last known-good preview, but only if it remains the workflow's pinned candidate and the current head of PR #67 and its checks are still successful. Otherwise, review the desired candidate and update the workflow pins through a reviewed preview PR; PR #67 must point at that exact SHA. Confirm the new run's source SHA and per-file manifest against the previous successful run. A failed build, check, source identity test, or hash check cannot proceed to deployment.
+To roll back, update the workflow's pinned source SHA through a reviewed preview PR to the last known-good preview, but only if it is the current head of PR #67 and its checks are still successful. Confirm the new run's source SHA and per-file manifest against the previous successful run. A failed build, check, source identity test, or hash check cannot proceed to deployment.
 
 ## Public and synthetic data only
 

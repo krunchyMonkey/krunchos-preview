@@ -3,10 +3,6 @@ name: Deploy KrunchOS preview
 on:
   workflow_dispatch:
     inputs:
-      source_commit:
-        description: Full SHA of the current reviewed PR #67 head in krunchyMonkey/krunchymonkey-site
-        required: true
-        type: string
       authorize_publication:
         description: I reviewed this exact build and authorize publishing it publicly
         required: true
@@ -41,7 +37,7 @@ jobs:
     steps:
       - name: Validate source commit and PR identity
         env:
-          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          SOURCE_COMMIT: ${{ env.PREVIEW_CANDIDATE_COMMIT }}
         run: |
           set -euo pipefail
           if [[ ! "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
@@ -69,7 +65,7 @@ jobs:
           }
       - name: Require successful CI checks for this exact commit
         env:
-          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          SOURCE_COMMIT: ${{ env.PREVIEW_CANDIDATE_COMMIT }}
         run: |
           set -euo pipefail
           if [[ ! "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ || "$SOURCE_COMMIT" != "$PREVIEW_CANDIDATE_COMMIT" ]]; then
@@ -91,13 +87,13 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: krunchyMonkey/krunchymonkey-site
-          ref: ${{ inputs.source_commit }}
+          ref: ${{ env.PREVIEW_CANDIDATE_COMMIT }}
           path: source
           fetch-depth: 0
           persist-credentials: false
       - name: Verify the identified visual-baseline history
         env:
-          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          SOURCE_COMMIT: ${{ env.PREVIEW_CANDIDATE_COMMIT }}
         run: |
           set -euo pipefail
           base_commit="$(jq -er '.base.sha' "$RUNNER_TEMP/source-pr.json")"
@@ -146,7 +142,7 @@ jobs:
         run: npm run check:dist -- --json "$RUNNER_TEMP/krunchos-dist-manifest.json"
       - name: Stage only the verified static site
         env:
-          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          SOURCE_COMMIT: ${{ env.PREVIEW_CANDIDATE_COMMIT }}
         run: |
           set -euo pipefail
           test -s source/krunchos/dist/index.html || {
@@ -228,7 +224,7 @@ jobs:
     steps:
       - name: Reconfirm source PR head and CI after manual approval
         env:
-          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          SOURCE_COMMIT: ${{ env.PREVIEW_CANDIDATE_COMMIT }}
         run: |
           set -euo pipefail
           if [[ ! "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ || "$SOURCE_COMMIT" != "$PREVIEW_CANDIDATE_COMMIT" ]]; then
@@ -273,7 +269,7 @@ jobs:
           path: ${{ runner.temp }}/krunchos-provenance
       - name: Verify artifact contents and manifest
         env:
-          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          SOURCE_COMMIT: ${{ env.PREVIEW_CANDIDATE_COMMIT }}
         run: |
           set -euo pipefail
           test -s _site/os/index.html || {

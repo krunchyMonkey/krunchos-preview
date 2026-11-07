@@ -81,6 +81,38 @@ jobs:
             echo "Require an approval and no outstanding change request for this exact PR #67 commit" >&2
             exit 1
           }
+      - name: Verify reviewed baseline PRs
+        run: |
+          set -euo pipefail
+          verify_reviewed_baseline() {
+            local pr_number="$1"
+            local expected_sha="$2"
+            curl --fail --silent --show-error \
+              "https://api.github.com/repos/krunchyMonkey/krunchymonkey-site/pulls/${pr_number}" \
+              --output "$RUNNER_TEMP/baseline-pr-${pr_number}.json"
+            jq -e --arg sha "$expected_sha" --argjson number "$pr_number" '
+              .number == $number and
+              .state == "open" and
+              .head.repo.full_name == "krunchyMonkey/krunchymonkey-site" and
+              .head.sha == $sha
+            ' "$RUNNER_TEMP/baseline-pr-${pr_number}.json" >/dev/null || {
+              echo "Baseline PR #$pr_number no longer has the pinned source head" >&2
+              return 1
+            }
+            curl --fail --silent --show-error \
+              "https://api.github.com/repos/krunchyMonkey/krunchymonkey-site/pulls/${pr_number}/reviews?per_page=100" \
+              --output "$RUNNER_TEMP/baseline-reviews-${pr_number}.json"
+            jq -e --arg sha "$expected_sha" '
+              ([.[] | select(.commit_id == $sha and .state == "APPROVED")] | length > 0) and
+              ([.[] | select(.commit_id == $sha and .state == "CHANGES_REQUESTED")] | length == 0)
+            ' "$RUNNER_TEMP/baseline-reviews-${pr_number}.json" >/dev/null || {
+              echo "Baseline PR #$pr_number needs approval on its pinned head and no outstanding change request" >&2
+              return 1
+            }
+          }
+          verify_reviewed_baseline 55 ab1d7d809315eaf2a181320a5e0a663c1c10635b
+          verify_reviewed_baseline 62 d3a91139360b61fc296416e013c6c25ab7c6731e
+          verify_reviewed_baseline 63 673c6eb959be3bfe6af2f0590712bcf459917f74
       - name: Check out the exact source commit with history
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -156,9 +188,9 @@ jobs:
           }
           printf '%s\n' "$SOURCE_COMMIT" > "$RUNNER_TEMP/krunchos-provenance/source-commit.txt"
           printf '%s\n' \
-            ab1d7d809315eaf2a181320a5e0a663c1c10635b \
-            d3a91139360b61fc296416e013c6c25ab7c6731e \
-            673c6eb959be3bfe6af2f0590712bcf459917f74 \
+            'PR #55 ab1d7d809315eaf2a181320a5e0a663c1c10635b' \
+            'PR #62 d3a91139360b61fc296416e013c6c25ab7c6731e' \
+            'PR #63 673c6eb959be3bfe6af2f0590712bcf459917f74' \
             > "$RUNNER_TEMP/krunchos-provenance/visual-baseline-commits.txt"
           printf '%s\n' static-validation preview-checks e2e \
             > "$RUNNER_TEMP/krunchos-provenance/required-source-checks.txt"
@@ -238,6 +270,35 @@ jobs:
               exit 1
             }
           done
+          verify_reviewed_baseline() {
+            local pr_number="$1"
+            local expected_sha="$2"
+            curl --fail --silent --show-error \
+              "https://api.github.com/repos/krunchyMonkey/krunchymonkey-site/pulls/${pr_number}" \
+              --output "$RUNNER_TEMP/baseline-pr-${pr_number}.json"
+            jq -e --arg sha "$expected_sha" --argjson number "$pr_number" '
+              .number == $number and
+              .state == "open" and
+              .head.repo.full_name == "krunchyMonkey/krunchymonkey-site" and
+              .head.sha == $sha
+            ' "$RUNNER_TEMP/baseline-pr-${pr_number}.json" >/dev/null || {
+              echo "Baseline PR #$pr_number no longer has the pinned source head" >&2
+              return 1
+            }
+            curl --fail --silent --show-error \
+              "https://api.github.com/repos/krunchyMonkey/krunchymonkey-site/pulls/${pr_number}/reviews?per_page=100" \
+              --output "$RUNNER_TEMP/baseline-reviews-${pr_number}.json"
+            jq -e --arg sha "$expected_sha" '
+              ([.[] | select(.commit_id == $sha and .state == "APPROVED")] | length > 0) and
+              ([.[] | select(.commit_id == $sha and .state == "CHANGES_REQUESTED")] | length == 0)
+            ' "$RUNNER_TEMP/baseline-reviews-${pr_number}.json" >/dev/null || {
+              echo "Baseline PR #$pr_number no longer has a valid approval" >&2
+              return 1
+            }
+          }
+          verify_reviewed_baseline 55 ab1d7d809315eaf2a181320a5e0a663c1c10635b
+          verify_reviewed_baseline 62 d3a91139360b61fc296416e013c6c25ab7c6731e
+          verify_reviewed_baseline 63 673c6eb959be3bfe6af2f0590712bcf459917f74
           curl --fail --silent --show-error \
             https://api.github.com/repos/krunchyMonkey/krunchymonkey-site/pulls/67/reviews?per_page=100 \
             --output "$RUNNER_TEMP/source-reviews.json"

@@ -25,7 +25,7 @@ Publishing requires an owner to explicitly authorize the first public deployment
 3. Run the workflow manually. It verifies the commit is already on source `main`, runs the source checks and static build, validates `dist/index.html`, creates a file-hash manifest, and deploys only after the second job verifies that manifest.
 4. Review the Actions run summary and `github-pages` deployment URL. Confirm the source SHA and manifest match the approved build before sharing the preview URL.
 
-There is no push, pull-request, release, schedule, or API-triggered deployment path in the workflow. No production credentials, repository secrets, private networks, or private services are needed.
+There is no push, pull-request, release, or schedule trigger; deployment requires an explicit `workflow_dispatch`. No production credentials, repository secrets, private networks, or private services are needed.
 
 ## Rollback
 
@@ -38,3 +38,15 @@ The preview is public and must contain only public, synthetic, or clearly concep
 ## Repository safeguards
 
 The workflow grants read-only repository access to its build job. Only the `deploy` job receives `pages: write` and `id-token: write`; it also receives `actions: read` to retrieve the verified build artifact. The workflow pins GitHub-maintained Actions to reviewed release commits. The repository should use read-only default Actions permissions and an allowlist limited to the Actions used here. Protect `main` with pull requests and at least one approval so deployment-configuration changes are reviewed. Keep automatic merges disabled, and do not add repository secrets.
+
+### Owner-side settings still required
+
+The session can create repository contents but cannot change repository settings. Before the first deployment, an owner must:
+
+1. Under **Settings → Pages**, set the publishing source to **GitHub Actions**. Do not select branch publishing or enter a custom domain.
+2. Under **Settings → Environments**, create `github-pages` and restrict deployments to `main`. The workflow references this exact environment; no environment secrets are required.
+3. Under **Settings → Branches**, protect `main` by requiring pull requests and at least one approval; dismiss stale approvals. This applies review to deployment configuration and all other changes on `main`.
+4. Under **Settings → Actions → General**, allow only the pinned actions used in the workflow: `actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683`, `actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020`, `actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02`, `actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093`, `actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa`, and `actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e`. Set the default workflow token permission to read-only and leave **Allow GitHub Actions to create and approve pull requests** disabled.
+5. Keep repository and environment secrets empty and automatic merges disabled.
+
+No application deployment is part of these setup steps. The first public deployment still requires explicit authorization after the source commit and static output have been reviewed.

@@ -58,6 +58,8 @@ jobs:
           jq -e --arg sha "$SOURCE_COMMIT" '
             .number == 67 and
             .state == "open" and
+            .base.repo.full_name == "krunchyMonkey/krunchymonkey-site" and
+            (.base.sha | test("^[0-9a-f]{40}$")) and
             .head.repo.full_name == "krunchyMonkey/krunchymonkey-site" and
             .head.ref == "chore/krunchos-dist-check" and
             .head.sha == $sha
@@ -98,6 +100,11 @@ jobs:
           SOURCE_COMMIT: ${{ inputs.source_commit }}
         run: |
           set -euo pipefail
+          base_commit="$(jq -er '.base.sha' "$RUNNER_TEMP/source-pr.json")"
+          git -C source merge-base --is-ancestor "$base_commit" "$SOURCE_COMMIT" || {
+            echo "Source PR base $base_commit is not an ancestor of the pinned candidate" >&2
+            exit 1
+          }
           for baseline_commit in "$BASELINE_PR_55_COMMIT" "$BASELINE_PR_62_COMMIT" "$BASELINE_PR_63_COMMIT"; do
             git -C source merge-base --is-ancestor "$baseline_commit" "$SOURCE_COMMIT" || {
               echo "Source commit does not contain the recorded visual-baseline history: $baseline_commit" >&2
@@ -161,6 +168,7 @@ jobs:
             exit 1
           }
           printf '%s\n' "$SOURCE_COMMIT" > "$RUNNER_TEMP/krunchos-provenance/source-commit.txt"
+          jq -er '.base.sha' "$RUNNER_TEMP/source-pr.json" > "$RUNNER_TEMP/krunchos-provenance/source-pr-base.txt"
           printf '%s\n' \
             "PR #55 $BASELINE_PR_55_COMMIT" \
             "PR #62 $BASELINE_PR_62_COMMIT" \
@@ -181,6 +189,7 @@ jobs:
             echo "- Source repository: \`krunchyMonkey/krunchymonkey-site\`"
             echo "- PR: [#67](https://github.com/krunchyMonkey/krunchymonkey-site/pull/67)"
             echo "- Source commit: \`$SOURCE_COMMIT\`"
+            echo "- Source PR base: \`$(cat "$RUNNER_TEMP/krunchos-provenance/source-pr-base.txt")\`"
             echo "- Required source CI: \`static-validation\`, \`preview-checks\`, \`e2e\` passed for this SHA"
             echo "- Visual baseline commits: PRs #55, #62, and #63 are ancestors; the baseline tree matches owner-approved PR #63"
             echo "- Preview workflow commit: \`$GITHUB_SHA\`"
@@ -232,6 +241,8 @@ jobs:
           jq -e --arg sha "$SOURCE_COMMIT" '
             .number == 67 and
             .state == "open" and
+            .base.repo.full_name == "krunchyMonkey/krunchymonkey-site" and
+            (.base.sha | test("^[0-9a-f]{40}$")) and
             .head.repo.full_name == "krunchyMonkey/krunchymonkey-site" and
             .head.ref == "chore/krunchos-dist-check" and
             .head.sha == $sha
@@ -271,6 +282,10 @@ jobs:
           }
           test "$(cat "$RUNNER_TEMP/krunchos-provenance/source-commit.txt")" = "$SOURCE_COMMIT" || {
             echo "Artifact source commit does not match the requested commit" >&2
+            exit 1
+          }
+          test "$(cat "$RUNNER_TEMP/krunchos-provenance/source-pr-base.txt")" = "$(jq -er '.base.sha' "$RUNNER_TEMP/source-pr.json")" || {
+            echo "Source PR base changed since the build; revalidate before publishing" >&2
             exit 1
           }
           test "$(cat "$RUNNER_TEMP/krunchos-provenance/preview-workflow-commit.txt")" = "$GITHUB_SHA" || {

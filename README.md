@@ -2,51 +2,54 @@
 
 This repository is an isolated GitHub Pages host for a future public preview of KrunchOS. It does not change or deploy the production website at [krunchyMonkey/krunchymonkey-site](https://github.com/krunchyMonkey/krunchymonkey-site), and it has no dependency on private Tracing Guatemala services.
 
-**The application has not been published.** The Pages workflow is manual-only and has not been run. No custom domain or DNS configuration is used.
+**The application has not been published.** The deployment workflow is manually triggered and requires an explicit publication confirmation. No custom domain or DNS configuration is used.
 
 ## Preview location
 
-The expected URL is <https://krunchymonkey.github.io/krunchos-preview/os/>. The workflow publishes only the verified `krunchos/dist` output under the `/os/` prefix in this repository's Pages artifact.
+The expected URL is <https://krunchymonkey.github.io/krunchos-preview/os/>. Only verified files from `krunchos/dist` are staged below `/os/`; the source static-artifact check enforces relocatable relative references for the project path.
 
-## Source and approval boundary
+## Source, verification, and approval boundary
 
-The static build originates from `krunchos/` in the main KrunchyMonkey site repository. Source PR [#67](https://github.com/krunchyMonkey/krunchymonkey-site/pull/67) adds static artifact checks and privacy checks; its `npm run check` includes type checks, lint, formatting, unit tests, build, and the `check:dist` allowlist/privacy/budget gate. The source commit must be on that repository's `main` branch before this workflow will accept it. This prevents deploying an unmerged PR head. The workflow checks that relationship and builds from the exact full commit SHA supplied at dispatch; it does not fetch or execute a workflow from the source repository.
+The static build originates from `krunchos/` in the KrunchyMonkey site repository. This workflow accepts only the exact full SHA pinned in its reviewed configuration **and** currently at the head of source PR [#67](https://github.com/krunchyMonkey/krunchymonkey-site/pull/67), from the fixed repository and branch. It checks that the current PR base is an ancestor of that commit and aborts deployment if the base changes after the build. The source PR may be a draft; the source commit does not have to be merged into the source repository's `main`. The workflow does not accept a repository URL, branch, command, or workflow path as input, and checks out that exact commit rather than a moving ref.
 
-At setup time, PR #67 is open and marked draft with a "do not merge" instruction, and PR [#66](https://github.com/krunchyMonkey/krunchymonkey-site/pull/66) is also open. Do not select either PR head as a release source. An owner must first review and merge the desired source changes; if that does not happen, the workflow's source-main check will fail. This preview setup does not authorize or perform any change to the source repository.
+Before building, the workflow requires successful GitHub Actions `static-validation`, `preview-checks`, and `e2e` check runs for that exact SHA. `preview-checks` includes TypeScript, lint and dependency-boundary checks, formatting, unit/component tests, Vite build, and the static `check:dist` allowlist/privacy/budget gate. `e2e` is a separate CI job and must pass for that SHA; `npm run check` is not represented as running Playwright. The workflow rechecks the pinned PR head and these CI checks after environment approval, before deployment.
 
-The workflow produces a GitHub Actions artifact from the pinned source commit, records per-file SHA-256 hashes, and checks those hashes again in the separate publishing job. The Actions run summary and retained provenance artifact identify the source commit and published file hashes. The build is checked by the source repository's `check:dist` script; only the static `dist/` tree is passed to Pages, at `os/`.
+The owner attested to the seven original visual baselines in [PR #55](https://github.com/krunchyMonkey/krunchymonkey-site/pull/55#issuecomment-6704440128), and their updates in [PR #62](https://github.com/krunchyMonkey/krunchymonkey-site/pull/62#issuecomment-6704647932) and [PR #63](https://github.com/krunchyMonkey/krunchymonkey-site/pull/63#issuecomment-6704648784). These sign-offs cover visual baselines only, not a deployment. The workflow records their exact commit SHAs, requires them to be ancestors of the pinned candidate, and compares the entire Linux screenshot tree to the approved PR #63 commit; it also checks the seven expected files exist. The exact-SHA `e2e` check verifies the current visual baselines. The workflow does not treat arbitrary comments as authorization or require a formal GitHub review of one's own PR.
+
+The workflow's fixed candidate and baseline pins are an auditable release record, not proof of permission to publish: protect preview `main` and require review of every workflow/pin change. If repository policy requires an independent PR approval, a separate reviewer must provide it; do not bypass the rule. A new source head or changed visual baselines require fresh owner review and a reviewed PR updating the pins and evidence before deployment.
+
+The build produces a SHA-256 manifest and provenance for the source SHA, preview workflow commit, required CI checks, and baseline commit IDs. A separate publishing job verifies the downloaded artifact against that manifest and rejects missing entry points, unexpected top-level content, symlinks, source maps, and key material. The only artifact passed to Pages is `krunchos/dist` staged under `os/`.
 
 ## Manually publishing a preview
 
-Publishing requires an owner to explicitly authorize the first public deployment. Once the source commit is reviewed and merged:
+Publishing requires both explicit authorization in the manual dispatch and approval of the `github-pages` environment if required reviewers are configured. The deploy job only runs when the workflow is dispatched from this preview repository's `main` branch.
 
-1. Open **Actions → Deploy KrunchOS preview → Run workflow** in this repository.
-2. Enter the full 40-character SHA of the approved commit on `krunchyMonkey/krunchymonkey-site` `main`. Confirm it is the intended commit and that its source PR and verification checks were reviewed.
-3. Run the workflow manually. It verifies the commit is already on source `main`, runs the source checks and static build, validates `dist/index.html`, creates a file-hash manifest, and deploys only after the second job verifies that manifest.
-4. Review the Actions run summary and `github-pages` deployment URL. Confirm the source SHA and manifest match the approved build before sharing the preview URL.
+1. Complete the owner settings below. Review source PR #67 and its exact pinned candidate, including its build/privacy report, E2E/visual CI results, the baseline sign-offs, and the reviewed preview workflow pins.
+2. After this preview configuration is reviewed and merged to `main`, open **Actions → Deploy KrunchOS preview → Run workflow**.
+3. Enter the full 40-character SHA pinned in the workflow, which must also be the current PR #67 head. Check **I reviewed this exact build and authorize publishing it publicly** only when you intend to publish that build. The build job first verifies the source and produces a manifest.
+4. Approve the pending deployment in the `github-pages` environment when GitHub requests it. The deploy job then revalidates the PR head and CI, and validates the artifact manifest before Pages upload.
+5. Review the Actions summary, provenance artifact, successful deployment, and `github-pages` deployment URL before sharing <https://krunchymonkey.github.io/krunchos-preview/os/>.
 
-There is no push, pull-request, release, or schedule trigger; deployment requires an explicit `workflow_dispatch`. No production credentials, repository secrets, private networks, or private services are needed.
+There is no push, pull-request, release, or schedule trigger; `workflow_dispatch` can be invoked via GitHub's UI or API. The source build job has no secrets and read-only repository access. Do not add production credentials or connect the workflow to private networks or services.
 
 ## Rollback
 
-To roll back, manually run the workflow again with the full source commit SHA used by the last known-good preview. The workflow rebuilds that exact commit, reruns its checks, and deploys the resulting static files. Compare the new run's per-file SHA-256 manifest with the earlier successful run before considering the rollback complete. A failed build or hash check never proceeds to deployment.
+To roll back, run the workflow manually with the full source SHA used by the last known-good preview, but only if it remains the workflow's pinned candidate and the current head of PR #67 and its checks are still successful. Otherwise, review the desired candidate and update the workflow pins through a reviewed preview PR; PR #67 must point at that exact SHA. Confirm the new run's source SHA and per-file manifest against the previous successful run. A failed build, check, source identity test, or hash check cannot proceed to deployment.
 
 ## Public and synthetic data only
 
-The preview is public and must contain only public, synthetic, or clearly conceptual demo data. Do not include real client/customer records, secrets, credentials, private endpoints, or data from Tracing Guatemala. The source `check:dist` privacy gate rejects known private-host, network, API, and key-material patterns, but review the source and build output before authorizing a public deployment; automated checks are not a substitute for review.
+The preview is public and must contain only public, synthetic, or clearly conceptual demo data. Do not include real client/customer records, secrets, credentials, private endpoints, or data from Tracing Guatemala. The source `check:dist` privacy gate rejects known private-host, network, API, and key-material patterns, but manual review is still required; automated checks are not a substitute for review.
 
-## Repository safeguards
+## Repository safeguards and owner setup
 
-The workflow grants read-only repository access to its build job. Only the `deploy` job receives `pages: write` and `id-token: write`; it also receives `actions: read` to retrieve the verified build artifact. The workflow pins GitHub-maintained Actions to reviewed release commits. The repository should use read-only default Actions permissions and an allowlist limited to the Actions used here. Protect `main` with pull requests and at least one approval so deployment-configuration changes are reviewed. Keep automatic merges disabled, and do not add repository secrets.
+The workflow has repository-level `contents: read`. Its build job only has `contents: read`; only the deploy job receives `pages: write`, `id-token: write`, and `actions: read`. Official GitHub Actions are pinned to reviewed commit SHAs. Automatic merges are disabled. The workflow contains no secrets.
 
-### Owner-side settings still required
+GitHub settings APIs returned 403 or 404 in this session, so these settings have **not** been configured or verified. Before merging this PR or attempting any deployment, an owner should use:
 
-The session can create repository contents but cannot change repository settings. Before the first deployment, an owner must:
+1. [Pages settings](https://github.com/krunchyMonkey/krunchos-preview/settings/pages): choose **GitHub Actions** as the publishing source. Do not configure branch publishing, a custom domain, or DNS.
+2. [Environment settings](https://github.com/krunchyMonkey/krunchos-preview/settings/environments): create `github-pages`, allow deployment from `main` only, and add required owner reviewers if the repository plan supports them. Do not add environment secrets. The dispatch confirmation is an additional explicit intent check, not a substitute for environment protection.
+3. [Branch protection](https://github.com/krunchyMonkey/krunchos-preview/settings/branches): require pull requests and at least one approval for `main`, dismiss stale approvals, and keep automatic merges disabled. This ensures workflow changes cannot be pushed directly without review.
+4. [Actions settings](https://github.com/krunchyMonkey/krunchos-preview/settings/actions): set default `GITHUB_TOKEN` permissions to read-only; disable the permission for Actions to create and approve pull requests; allow these pinned direct Actions: `actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683`, `actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020`, `actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02`, `actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093`, `actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa`, and `actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e`. The official pinned Pages upload action also invokes `actions/upload-artifact@v4` internally, so the Actions allowlist must permit that exact tag too. This transitive tag is mutable; review changes to it and to the official composite action as part of the deployment supply-chain risk.
+5. [Secrets settings](https://github.com/krunchyMonkey/krunchos-preview/settings/secrets/actions): confirm no repository secrets are present. No repository or environment secret is needed for this workflow.
 
-1. Under **Settings → Pages**, set the publishing source to **GitHub Actions**. Do not select branch publishing or enter a custom domain.
-2. Under **Settings → Environments**, create `github-pages` and restrict deployments to `main`. The workflow references this exact environment; no environment secrets are required.
-3. Under **Settings → Branches**, protect `main` by requiring pull requests and at least one approval; dismiss stale approvals. This applies review to deployment configuration and all other changes on `main`.
-4. Under **Settings → Actions → General**, allow only the pinned actions used in the workflow: `actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683`, `actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020`, `actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02`, `actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093`, `actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa`, and `actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e`. Set the default workflow token permission to read-only and leave **Allow GitHub Actions to create and approve pull requests** disabled.
-5. Keep repository and environment secrets empty and automatic merges disabled.
-
-No application deployment is part of these setup steps. The first public deployment still requires explicit authorization after the source commit and static output have been reviewed.
+The pinned source candidate is commit `d66bfa2e0eec3d977fd8e44b0c7df5cae8341103`. At audit time, source PR #67 was open and draft; its `static-validation`, `preview-checks`, and `e2e` checks all passed for that exact SHA. The candidate still needs explicit publication authorization; the owner's baseline sign-offs do not authorize deployment. This repository's deployment workflow itself has not been run, and the application remains unpublished.

@@ -4,49 +4,131 @@ on:
   workflow_dispatch:
     inputs:
       source_commit:
-        description: Full 40-character SHA of a reviewed commit on krunchyMonkey/krunchymonkey-site main
+        description: Full SHA of the current reviewed PR #67 head in krunchyMonkey/krunchymonkey-site
         required: true
         type: string
+      authorize_publication:
+        description: I reviewed this exact build and authorize publishing it publicly
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 concurrency:
-  group: github-pages
+  group: krunchos-preview-pages
   cancel-in-progress: false
+
+# Changes to these pins and to this workflow require a reviewed PR to main.
+# Owner visual sign-offs (baseline approval only; not publication authority):
+# https://github.com/krunchyMonkey/krunchymonkey-site/pull/55#issuecomment-6704440128
+# https://github.com/krunchyMonkey/krunchymonkey-site/pull/62#issuecomment-6704647932
+# https://github.com/krunchyMonkey/krunchymonkey-site/pull/63#issuecomment-6704648784
+env:
+  PREVIEW_CANDIDATE_COMMIT: d66bfa2e0eec3d977fd8e44b0c7df5cae8341103
+  BASELINE_PR_55_COMMIT: ab1d7d809315eaf2a181320a5e0a663c1c10635b
+  BASELINE_PR_62_COMMIT: d3a91139360b61fc296416e013c6c25ab7c6731e
+  BASELINE_PR_63_COMMIT: 673c6eb959be3bfe6af2f0590712bcf459917f74
 
 jobs:
   build:
     name: Build and verify pinned source
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     permissions:
       contents: read
     steps:
-      - name: Verify source commit is merged to main
+      - name: Validate source commit and PR identity
         env:
           SOURCE_COMMIT: ${{ inputs.source_commit }}
         run: |
           set -euo pipefail
           if [[ ! "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "source_commit must be a full lowercase 40-character commit SHA" >&2
+            echo "source_commit must be exactly 40 lowercase hexadecimal characters" >&2
+            exit 1
+          fi
+          if [[ "$SOURCE_COMMIT" != "$PREVIEW_CANDIDATE_COMMIT" ]]; then
+            echo "Source commit does not match the candidate pinned in the reviewed workflow" >&2
             exit 1
           fi
           curl --fail --silent --show-error \
-            "https://api.github.com/repos/krunchyMonkey/krunchymonkey-site/compare/${SOURCE_COMMIT}...main" \
-            --output "$RUNNER_TEMP/source-compare.json"
-          status="$(jq -r '.status' "$RUNNER_TEMP/source-compare.json")"
-          if [[ "$status" != "ahead" && "$status" != "identical" ]]; then
-            echo "Source commit is not an ancestor of krunchyMonkey/krunchymonkey-site main (compare status: $status)" >&2
+            https://api.github.com/repos/krunchyMonkey/krunchymonkey-site/pulls/67 \
+            --output "$RUNNER_TEMP/source-pr.json"
+          jq -e --arg sha "$SOURCE_COMMIT" '
+            .number == 67 and
+            .state == "open" and
+            .base.repo.full_name == "krunchyMonkey/krunchymonkey-site" and
+            (.base.sha | test("^[0-9a-f]{40}$")) and
+            .head.repo.full_name == "krunchyMonkey/krunchymonkey-site" and
+            .head.ref == "chore/krunchos-dist-check" and
+            .head.sha == $sha
+          ' "$RUNNER_TEMP/source-pr.json" >/dev/null || {
+            echo "Commit must be the current head of the fixed source PR #67 branch" >&2
+            exit 1
+          }
+      - name: Require successful CI checks for this exact commit
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ || "$SOURCE_COMMIT" != "$PREVIEW_CANDIDATE_COMMIT" ]]; then
+            echo "Source commit does not match the candidate pinned in the reviewed workflow" >&2
             exit 1
           fi
-      - name: Check out the exact source commit
+          curl --fail --silent --show-error \
+            "https://api.github.com/repos/krunchyMonkey/krunchymonkey-site/commits/${SOURCE_COMMIT}/check-runs?per_page=100" \
+            --output "$RUNNER_TEMP/source-checks.json"
+          for required in static-validation preview-checks e2e; do
+            if ! jq -e --arg name "$required" \
+              '[.check_runs[] | select(.name == $name and .app.slug == "github-actions")] | sort_by(.id) | last | .status == "completed" and .conclusion == "success"' \
+              "$RUNNER_TEMP/source-checks.json" >/dev/null; then
+              echo "Required successful check '$required' is missing for $SOURCE_COMMIT" >&2
+              exit 1
+            fi
+          done
+      - name: Check out the exact source commit with history
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: krunchyMonkey/krunchymonkey-site
           ref: ${{ inputs.source_commit }}
           path: source
+          fetch-depth: 0
           persist-credentials: false
+      - name: Verify the identified visual-baseline history
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          set -euo pipefail
+          base_commit="$(jq -er '.base.sha' "$RUNNER_TEMP/source-pr.json")"
+          git -C source merge-base --is-ancestor "$base_commit" "$SOURCE_COMMIT" || {
+            echo "Source PR base $base_commit is not an ancestor of the pinned candidate" >&2
+            exit 1
+          }
+          for baseline_commit in "$BASELINE_PR_55_COMMIT" "$BASELINE_PR_62_COMMIT" "$BASELINE_PR_63_COMMIT"; do
+            git -C source merge-base --is-ancestor "$baseline_commit" "$SOURCE_COMMIT" || {
+              echo "Source commit does not contain the recorded visual-baseline history: $baseline_commit" >&2
+              exit 1
+            }
+          done
+          git -C source diff --quiet "$BASELINE_PR_63_COMMIT" "$SOURCE_COMMIT" -- \
+            krunchos/e2e/__screenshots__/linux/ || {
+              echo "Candidate visual baselines differ from the owner-approved PR #63 tree" >&2
+              exit 1
+            }
+          for baseline in \
+            krunchos/e2e/__screenshots__/linux/desktop-chromium/8bitcn-project-cards.png \
+            krunchos/e2e/__screenshots__/linux/desktop-chromium/desktop-boot.png \
+            krunchos/e2e/__screenshots__/linux/desktop-chromium/overlap-open-bench-raised.png \
+            krunchos/e2e/__screenshots__/linux/desktop-chromium/overlap-workbench-raised.png \
+            krunchos/e2e/__screenshots__/linux/desktop-chromium/workbench-focused.png \
+            krunchos/e2e/__screenshots__/linux/mobile-chromium/mobile-launcher.png \
+            krunchos/e2e/__screenshots__/linux/mobile-chromium/mobile-workbench.png; do
+            test -s "source/$baseline" || {
+              echo "Required visual baseline is missing: $baseline" >&2
+              exit 1
+            }
+          done
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
@@ -56,35 +138,64 @@ jobs:
       - name: Install locked dependencies
         working-directory: source/krunchos
         run: npm ci --no-audit --no-fund
-      - name: Run source verification and build
+      - name: Run source verification and production build
         working-directory: source/krunchos
         run: npm run check
       - name: Generate the static artifact privacy report
         working-directory: source/krunchos
         run: npm run check:dist -- --json "$RUNNER_TEMP/krunchos-dist-manifest.json"
-      - name: Stage only the KrunchOS static site
+      - name: Stage only the verified static site
         env:
           SOURCE_COMMIT: ${{ inputs.source_commit }}
         run: |
           set -euo pipefail
-          test -s source/krunchos/dist/index.html || { echo "Expected krunchos/dist/index.html is missing or empty" >&2; exit 1; }
+          test -s source/krunchos/dist/index.html || {
+            echo "Expected krunchos/dist/index.html is missing or empty" >&2
+            exit 1
+          }
           if find source/krunchos/dist -type l -print -quit | grep -q .; then
             echo "Symlinks are not allowed in the static build" >&2
             exit 1
           fi
+          if find source/krunchos/dist -type f \( -name '*.map' -o -name '*.pem' -o -name '*.key' \) -print -quit | grep -q .; then
+            echo "Source maps or key material are not allowed in the static build" >&2
+            exit 1
+          fi
           mkdir -p "$RUNNER_TEMP/krunchos-site/os" "$RUNNER_TEMP/krunchos-provenance"
           cp -a source/krunchos/dist/. "$RUNNER_TEMP/krunchos-site/os/"
-          test -s "$RUNNER_TEMP/krunchos-site/os/index.html" || { echo "Expected /os/ entry point is missing or empty" >&2; exit 1; }
+          test -s "$RUNNER_TEMP/krunchos-site/os/index.html" || {
+            echo "Expected /os/ entry point is missing or empty" >&2
+            exit 1
+          }
           printf '%s\n' "$SOURCE_COMMIT" > "$RUNNER_TEMP/krunchos-provenance/source-commit.txt"
-          (cd "$RUNNER_TEMP/krunchos-site" && find os -type f -print0 | sort -z | xargs -0 sha256sum) > "$RUNNER_TEMP/krunchos-provenance/manifest.txt"
+          jq -er '.base.sha' "$RUNNER_TEMP/source-pr.json" > "$RUNNER_TEMP/krunchos-provenance/source-pr-base.txt"
+          printf '%s\n' \
+            "PR #55 $BASELINE_PR_55_COMMIT" \
+            "PR #62 $BASELINE_PR_62_COMMIT" \
+            "PR #63 $BASELINE_PR_63_COMMIT" \
+            > "$RUNNER_TEMP/krunchos-provenance/visual-baseline-commits.txt"
+          printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/krunchos-provenance/preview-workflow-commit.txt"
+          printf '%s\n' static-validation preview-checks e2e \
+            > "$RUNNER_TEMP/krunchos-provenance/required-source-checks.txt"
+          (cd "$RUNNER_TEMP/krunchos-site" && find os -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum) \
+            > "$RUNNER_TEMP/krunchos-provenance/manifest.txt"
+          test -s "$RUNNER_TEMP/krunchos-provenance/manifest.txt" || {
+            echo "Static site manifest is empty" >&2
+            exit 1
+          }
           manifest_sha="$(sha256sum "$RUNNER_TEMP/krunchos-provenance/manifest.txt" | cut -d ' ' -f 1)"
           {
             echo "### KrunchOS static build verified"
             echo "- Source repository: \`krunchyMonkey/krunchymonkey-site\`"
+            echo "- PR: [#67](https://github.com/krunchyMonkey/krunchymonkey-site/pull/67)"
             echo "- Source commit: \`$SOURCE_COMMIT\`"
+            echo "- Source PR base: \`$(cat "$RUNNER_TEMP/krunchos-provenance/source-pr-base.txt")\`"
+            echo "- Required source CI: \`static-validation\`, \`preview-checks\`, \`e2e\` passed for this SHA"
+            echo "- Visual baseline commits: PRs #55, #62, and #63 are ancestors; the baseline tree matches owner-approved PR #63"
+            echo "- Preview workflow commit: \`$GITHUB_SHA\`"
             echo "- Published prefix: \`/os/\`"
             echo "- File manifest SHA-256: \`$manifest_sha\`"
-            echo "- Source privacy/build gate: \`npm run check\` and \`npm run check:dist\` passed"
+            echo "- Local source gate: \`npm run check\` and \`npm run check:dist\` passed"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload verified Pages files
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -102,8 +213,9 @@ jobs:
           retention-days: 90
 
   deploy:
-    name: Publish verified artifact to Pages
+    name: Publish reviewed artifact to Pages
     needs: build
+    if: github.ref == 'refs/heads/main' && inputs.authorize_publication == true
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -114,6 +226,41 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - name: Reconfirm source PR head and CI after manual approval
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ || "$SOURCE_COMMIT" != "$PREVIEW_CANDIDATE_COMMIT" ]]; then
+            echo "Source commit does not match the candidate pinned in the reviewed workflow" >&2
+            exit 1
+          fi
+          curl --fail --silent --show-error \
+            https://api.github.com/repos/krunchyMonkey/krunchymonkey-site/pulls/67 \
+            --output "$RUNNER_TEMP/source-pr.json"
+          jq -e --arg sha "$SOURCE_COMMIT" '
+            .number == 67 and
+            .state == "open" and
+            .base.repo.full_name == "krunchyMonkey/krunchymonkey-site" and
+            (.base.sha | test("^[0-9a-f]{40}$")) and
+            .head.repo.full_name == "krunchyMonkey/krunchymonkey-site" and
+            .head.ref == "chore/krunchos-dist-check" and
+            .head.sha == $sha
+          ' "$RUNNER_TEMP/source-pr.json" >/dev/null || {
+            echo "PR #67 no longer points at the authorized source commit" >&2
+            exit 1
+          }
+          curl --fail --silent --show-error \
+            "https://api.github.com/repos/krunchyMonkey/krunchymonkey-site/commits/${SOURCE_COMMIT}/check-runs?per_page=100" \
+            --output "$RUNNER_TEMP/source-checks.json"
+          for required in static-validation preview-checks e2e; do
+            jq -e --arg name "$required" \
+              '[.check_runs[] | select(.name == $name and .app.slug == "github-actions")] | sort_by(.id) | last | .status == "completed" and .conclusion == "success"' \
+              "$RUNNER_TEMP/source-checks.json" >/dev/null || {
+              echo "Required source check '$required' is no longer successful" >&2
+              exit 1
+            }
+          done
       - name: Download verified Pages files
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -124,24 +271,51 @@ jobs:
         with:
           name: krunchos-provenance
           path: ${{ runner.temp }}/krunchos-provenance
-      - name: Verify artifact and /os/ entry point
+      - name: Verify artifact contents and manifest
         env:
           SOURCE_COMMIT: ${{ inputs.source_commit }}
         run: |
           set -euo pipefail
-          test -s _site/os/index.html || { echo "Expected _site/os/index.html is missing or empty" >&2; exit 1; }
-          test "$(cat "$RUNNER_TEMP/krunchos-provenance/source-commit.txt")" = "$SOURCE_COMMIT" || { echo "Artifact source commit does not match the requested commit" >&2; exit 1; }
+          test -s _site/os/index.html || {
+            echo "Expected _site/os/index.html is missing or empty" >&2
+            exit 1
+          }
+          test "$(cat "$RUNNER_TEMP/krunchos-provenance/source-commit.txt")" = "$SOURCE_COMMIT" || {
+            echo "Artifact source commit does not match the requested commit" >&2
+            exit 1
+          }
+          test "$(cat "$RUNNER_TEMP/krunchos-provenance/source-pr-base.txt")" = "$(jq -er '.base.sha' "$RUNNER_TEMP/source-pr.json")" || {
+            echo "Source PR base changed since the build; revalidate before publishing" >&2
+            exit 1
+          }
+          test "$(cat "$RUNNER_TEMP/krunchos-provenance/preview-workflow-commit.txt")" = "$GITHUB_SHA" || {
+            echo "Artifact workflow commit does not match this run" >&2
+            exit 1
+          }
+          test -s "$RUNNER_TEMP/krunchos-provenance/required-source-checks.txt" || {
+            echo "Source CI provenance is missing" >&2
+            exit 1
+          }
+          test -s "$RUNNER_TEMP/krunchos-provenance/visual-baseline-commits.txt" || {
+            echo "Visual baseline provenance is missing" >&2
+            exit 1
+          }
           if find _site -type l -print -quit | grep -q .; then
             echo "Symlinks are not allowed in the Pages artifact" >&2
             exit 1
           fi
-          (cd _site && find os -type f -print0 | sort -z | xargs -0 sha256sum) > "$RUNNER_TEMP/actual-manifest.txt"
-          diff -u "$RUNNER_TEMP/krunchos-provenance/manifest.txt" "$RUNNER_TEMP/actual-manifest.txt"
+          if find _site -type f \( -name '*.map' -o -name '*.pem' -o -name '*.key' \) -print -quit | grep -q .; then
+            echo "Source maps or key material are not allowed in the Pages artifact" >&2
+            exit 1
+          fi
           if find _site -mindepth 1 -maxdepth 1 ! -name os -print -quit | grep -q .; then
             echo "Only the /os/ static site is allowed in the Pages artifact" >&2
             exit 1
           fi
-          echo "The downloaded artifact matches the source commit and complete SHA-256 manifest." >> "$GITHUB_STEP_SUMMARY"
+          (cd _site && find os -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum) \
+            > "$RUNNER_TEMP/actual-manifest.txt"
+          diff -u "$RUNNER_TEMP/krunchos-provenance/manifest.txt" "$RUNNER_TEMP/actual-manifest.txt"
+          echo "Downloaded files match the pinned source commit and complete SHA-256 manifest." >> "$GITHUB_STEP_SUMMARY"
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
         with:
